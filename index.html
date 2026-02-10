@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>SPX Cross-Asset Risk Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f1220;
+      color: #e8eaf6;
+      margin: 0;
+      padding: 24px;
+    }
+    h1 { margin-bottom: 4px; }
+    h2 { margin-top: 32px; }
+    .subtitle { color: #9aa0ff; margin-bottom: 24px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: #171a2e;
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 10px 25px rgba(0,0,0,.35);
+    }
+    .label { font-size: 12px; color: #9aa0ff; }
+    .value { font-size: 28px; font-weight: 600; }
+    .score-0 { color: #00e676; }
+    .score-1 { color: #ffd54f; }
+    .score-2 { color: #ff5252; }
+    .total {
+      font-size: 48px;
+      font-weight: 700;
+    }
+    .regime {
+      font-size: 20px;
+      margin-top: 8px;
+    }
+    button {
+      background: #4f6cff;
+      border: none;
+      border-radius: 12px;
+      padding: 10px 18px;
+      font-size: 14px;
+      color: white;
+      cursor: pointer;
+      margin-top: 16px;
+    }
+    footer {
+      margin-top: 40px;
+      font-size: 12px;
+      color: #7c82c5;
+    }
+  </style>
+</head>
+<body>
+
+<h1>SPX Cross-Asset Risk Dashboard</h1>
+<div class="subtitle">Refresh after 15:55 ET — structural risk model</div>
+
+<button onclick="loadData()">Refresh Data</button>
+
+<h2>Market Indicators</h2>
+<div class="grid">
+  <div class="card"><div class="label">SPX</div><div id="spx" class="value">—</div></div>
+  <div class="card"><div class="label">VIX</div><div id="vix" class="value">—</div></div>
+  <div class="card"><div class="label">VVIX</div><div id="vvix" class="value">—</div></div>
+  <div class="card"><div class="label">VVIX / VIX</div><div id="vvixvix" class="value">—</div></div>
+  <div class="card"><div class="label">USDJPY</div><div id="usdjpy" class="value">—</div></div>
+  <div class="card"><div class="label">DXY</div><div id="dxy" class="value">—</div></div>
+  <div class="card"><div class="label">LQD / HYG</div><div id="credit" class="value">—</div></div>
+</div>
+
+<h2>Risk Score</h2>
+<div class="card">
+  <div class="label">TOTAL RISK SCORE</div>
+  <div id="total" class="total">—</div>
+  <div id="regime" class="regime">—</div>
+</div>
+
+<footer>
+  Public data via Stooq / Yahoo-compatible endpoints. For educational use.
+</footer>
+
+<script>
+async function fetchPrice(symbol) {
+  const url = `https://stooq.com/q/l/?s=${symbol}&f=sd2t2ohlcv&h&e=json`;
+  const r = await fetch(url);
+  const j = await r.json();
+  return parseFloat(j.data[0].close);
+}
+
+async function fetchHistory(symbol, days = 30) {
+  const url = `https://stooq.com/q/d/l/?s=${symbol}&i=d&c=${days}`;
+  const r = await fetch(url);
+  const text = await r.text();
+  const rows = text.trim().split("
+").slice(1);
+  return rows.map(r => parseFloat(r.split(',')[4])).filter(x => !isNaN(x));
+}
+
+function corr(a, b) {
+  const n = Math.min(a.length, b.length);
+  const ma = a.slice(-n).reduce((s,x)=>s+x,0)/n;
+  const mb = b.slice(-n).reduce((s,x)=>s+x,0)/n;
+  let num=0, da=0, db=0;
+  for (let i=0;i<n;i++){
+    const xa=a[a.length-n+i]-ma;
+    const xb=b[b.length-n+i]-mb;
+    num+=xa*xb; da+=xa*xa; db+=xb*xb;
+  }
+  return num/Math.sqrt(da*db);
+}
+
+function scoreVVIX(ratio) {
+  if (ratio < 5.5) return 0;
+  if (ratio < 5.8) return 1;
+  return 2;
+}
+
+function scoreCredit(r) {
+  if (r < 1.32) return 0;
+  if (r < 1.35) return 1;
+  return 2;
+}
+
+function scoreCorr(c) {
+  if (c > -0.2) return 0;
+  if (c > -0.4) return 1;
+  return 2;
+}
+
+function regime(score) {
+  if (score <= 3) return "RISK ON";
+  if (score <= 7) return "CAUTION";
+  if (score <= 11) return "FRAGILE";
+  return "RISK OFF";
+}
+
+async function loadData() {
+  const [spx, vix, vvix, usdjpy, dxy, lqd, hyg] = await Promise.all([
+    fetchPrice('^spx'), fetchPrice('^vix'), fetchPrice('vvix'), fetchPrice('usdjpy'), fetchPrice('^dxy'), fetchPrice('lqd.us'), fetchPrice('hyg.us')
+  ]);
+
+  const [spxHist, ujHist] = await Promise.all([
+    fetchHistory('^spx'), fetchHistory('usdjpy')
+  ]);
+
+  const vvixvix = vvix / vix;
+  const credit = lqd / hyg;
+  const spxUjCorr = corr(spxHist, ujHist);
+
+  const score = scoreVVIX(vvixvix) + scoreCredit(credit) + scoreCorr(spxUjCorr);
+
+  document.getElementById('spx').textContent = spx.toFixed(1);
+  document.getElementById('vix').textContent = vix.toFixed(2);
+  document.getElementById('vvix').textContent = vvix.toFixed(1);
+  document.getElementById('vvixvix').textContent = vvixvix.toFixed(2);
+  document.getElementById('usdjpy').textContent = usdjpy.toFixed(2);
+  document.getElementById('dxy').textContent = dxy.toFixed(2);
+  document.getElementById('credit').textContent = credit.toFixed(3);
+
+  document.getElementById('total').textContent = score;
+  document.getElementById('regime').textContent = regime(score) + ` | SPX↔USDJPY corr: ${spxUjCorr.toFixed(2)}`;
+}
+</script>
+
+</body>
+</html>
